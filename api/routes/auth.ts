@@ -80,6 +80,27 @@ router.get('/me', requireAuth, async (req: AuthenticatedRequest, res: Response):
   }
 });
 
+// PUT /api/auth/profile (update full name)
+router.put('/profile', requireAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { full_name } = req.body;
+    if (!full_name || full_name.trim().length === 0) {
+      res.status(400).json({ error: 'Full name is required.' });
+      return;
+    }
+
+    const result = await query(
+      `UPDATE users SET full_name = $1, updated_at = NOW() WHERE id = $2 RETURNING id, email, full_name, role;`,
+      [full_name.trim(), req.user!.id]
+    );
+
+    res.json({ message: 'Profile updated successfully.', user: result.rows[0] });
+  } catch (err: any) {
+    console.error('Update profile error:', err);
+    res.status(500).json({ error: 'Failed to update profile.' });
+  }
+});
+
 // POST /api/auth/change-password
 router.post('/change-password', requireAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {

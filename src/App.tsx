@@ -27,6 +27,7 @@ import { VideosAdminPage } from './pages/admin/VideosAdmin';
 import { AnalyticsAdminPage } from './pages/admin/AnalyticsAdmin';
 import { UsersAdminPage } from './pages/admin/UsersAdmin';
 import { SettingsAdminPage } from './pages/admin/SettingsAdmin';
+import { ProfileAdminPage } from './pages/admin/ProfileAdmin';
 import { NotFoundPage } from './pages/NotFound';
 
 // Protected Route Helpers
@@ -148,12 +149,20 @@ export const App: React.FC = () => {
                     </ProtectedAdminRoute>
                   }
                 />
+                <Route
+                  path="/admin/profile"
+                  element={
+                    <ProtectedAdminRoute>
+                      <ProfileAdminPage />
+                    </ProtectedAdminRoute>
+                  }
+                />
 
                 {/* 404 Route */}
                 <Route path="*" element={<PublicLayout><NotFoundPage /></PublicLayout>} />
               </Routes>
 
-              {/* Persistent Global Radio Player (Stays alive across all routes) */}
+              {/* Persistent Global Radio Player */}
               <GlobalRadioPlayer />
             </div>
           </AnalyticsProvider>

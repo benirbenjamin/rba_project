@@ -8,7 +8,6 @@ import {
   X,
   ShieldAlert,
   ChevronRight,
-  ExternalLink,
   Volume2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -69,19 +68,13 @@ export const Header: React.FC = () => {
               <span className="hidden md:inline">Playing:</span> {currentStation.name}
             </div>
           )}
-          {isAdmin ? (
+          {/* Only show Admin Portal if already logged in as staff */}
+          {isAdmin && (
             <Link
               to="/admin"
               className="text-rba-yellow hover:underline font-bold flex items-center gap-1 text-[11px]"
             >
               <ShieldAlert className="w-3 h-3" /> Admin Portal
-            </Link>
-          ) : (
-            <Link
-              to="/admin/login"
-              className="text-slate-400 hover:text-white transition-colors text-[11px]"
-            >
-              Admin Login
             </Link>
           )}
         </div>
@@ -194,25 +187,17 @@ export const Header: React.FC = () => {
             <Link
               to="/tv"
               onClick={() => setMobileMenuOpen(false)}
-              className="flex-1 mr-2 py-2.5 rounded-xl bg-red-600 text-white font-bold text-center text-sm shadow-md"
+              className="w-full py-2.5 rounded-xl bg-red-600 text-white font-bold text-center text-sm shadow-md"
             >
               Watch RTV Live
             </Link>
-            {isAdmin ? (
+            {isAdmin && (
               <Link
                 to="/admin"
                 onClick={() => setMobileMenuOpen(false)}
-                className="py-2.5 px-4 rounded-xl bg-rba-yellow text-rba-dark font-bold text-sm"
+                className="ml-2 py-2.5 px-4 rounded-xl bg-rba-yellow text-rba-dark font-bold text-sm"
               >
                 Admin
-              </Link>
-            ) : (
-              <Link
-                to="/admin/login"
-                onClick={() => setMobileMenuOpen(false)}
-                className="py-2.5 px-4 rounded-xl bg-white/10 text-slate-200 font-semibold text-sm"
-              >
-                Login
               </Link>
             )}
           </div>

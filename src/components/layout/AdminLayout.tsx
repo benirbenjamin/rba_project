@@ -13,6 +13,8 @@ import {
   Tv,
   ExternalLink,
   Shield,
+  User,
+  Key,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -34,6 +36,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
     { name: 'Analytics & Insights', path: '/admin/analytics', icon: BarChart3 },
     ...(isSuperAdmin ? [{ name: 'User Management', path: '/admin/users', icon: Users }] : []),
     { name: 'System Settings', path: '/admin/settings', icon: Settings },
+    { name: 'Profile & Password', path: '/admin/profile', icon: Key },
   ];
 
   const isActive = (item: { path: string; exact?: boolean }) => {
@@ -115,10 +118,10 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
           </Link>
 
           <div className="p-3 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between">
-            <div className="min-w-0 pr-2">
+            <Link to="/admin/profile" className="min-w-0 pr-2 block hover:opacity-80 transition-opacity">
               <p className="text-xs font-bold text-white truncate">{user?.full_name || 'Administrator'}</p>
               <p className="text-[11px] text-slate-400 truncate">{user?.email}</p>
-            </div>
+            </Link>
             <button
               onClick={handleLogout}
               className="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-white/10 transition-colors"
