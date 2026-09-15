@@ -11,10 +11,9 @@ import {
   AlertCircle,
   Loader2,
   Tv,
-  Zap,
-  Wifi,
 } from 'lucide-react';
 import { Station } from '../../types';
+import { usePlayer } from '../../context/PlayerContext';
 import { trackEvent } from '../../services/api';
 
 interface LiveTVPlayerProps {
@@ -28,20 +27,21 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
   className = '',
   autoPlay = false,
 }) => {
+  const { playTv, pauseTv, isTvPlaying, playStation } = usePlayer();
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
-  const retryCountRef = useRef<number>(0);
+  const bufferingTimerRef = useRef<any>(null);
 
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isBuffering, setIsBuffering] = useState<boolean>(false);
   const [volume, setVolumeState] = useState<number>(1);
-  const [isMuted, setIsMuted] = useState<boolean>(true); // Start muted for smooth browser autoplay policy
+  // Start unmuted as requested by user
+  const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [showControls, setShowControls] = useState<boolean>(true);
-  const [dataSaver, setDataSaver] = useState<boolean>(true); // Default data saver enabled
   const controlsTimeoutRef = useRef<any>(null);
 
   const loadStream = () => {
@@ -51,7 +51,6 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
     setIsLoading(true);
     setIsBuffering(false);
     setError(null);
-    retryCountRef.current = 0;
 
     // Destroy existing HLS instance
     if (hlsRef.current) {
@@ -62,29 +61,26 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
     const streamUrl = station.stream_url;
 
     if (Hls.isSupported()) {
-      // Optimized HLS configuration: Low Data Consumption & Resilient Reconnection
+      // High-efficiency HLS configuration matched to RTV Wowza chunk sizes (~10-12s per chunk)
       const hls = new Hls({
         enableWorker: true,
-        // Critical: lowLatencyMode = false prevents buffer underrun timeouts on 1080p chunks
         lowLatencyMode: false,
-        // Data Saver optimizations: keep minimal forward buffer (8-12s instead of 60s+)
-        maxBufferLength: dataSaver ? 8 : 12,
-        maxMaxBufferLength: dataSaver ? 14 : 20,
-        // Limit max buffer memory strictly (3MB in data saver, prevents runaway background loading)
-        maxBufferSize: dataSaver ? 3 * 1024 * 1024 : 6 * 1024 * 1024,
-        backBufferLength: 0, // Immediately purge played segments to save bandwidth & memory
-        maxBufferHole: 0.5,
-        highBufferWatchdogPeriod: 2,
-        // Generous network timeouts to prevent premature "Network Error" on mobile/slower Wi-Fi
-        manifestLoadingTimeOut: 25000,
-        manifestLoadingMaxRetry: 8,
-        manifestLoadingRetryDelay: 1000,
+        // Chunk sizes are 10-12s; 30s buffer allows 2-3 segments smoothly without memory bloat
+        maxBufferLength: 30,
+        maxMaxBufferLength: 50,
+        maxBufferSize: 25 * 1024 * 1024,
+        backBufferLength: 0, // Discard past segments immediately to save data
+        // Start 2 segments from live edge so playback starts instantly
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDurationCount: 5,
+        startFragPrefetch: true,
+        // Generous timeouts for smooth playback on mobile & slow Wi-Fi
+        manifestLoadingTimeOut: 20000,
+        manifestLoadingMaxRetry: 6,
         fragLoadingTimeOut: 30000,
-        fragLoadingMaxRetry: 10,
-        fragLoadingRetryDelay: 1500,
-        levelLoadingTimeOut: 25000,
-        levelLoadingMaxRetry: 8,
-        levelLoadingRetryDelay: 1000,
+        fragLoadingMaxRetry: 8,
+        levelLoadingTimeOut: 20000,
+        levelLoadingMaxRetry: 6,
       });
 
       hlsRef.current = hls;
@@ -96,44 +92,29 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
         setIsBuffering(false);
         setError(null);
         if (autoPlay) {
-          video.play().catch(() => {
-            setIsPlaying(false);
-          });
+          attemptPlay(false);
         }
       });
 
-      // Resilient Error Handling & Self-Healing
+      // Self-healing recovery for network and media glitches
       hls.on(Hls.Events.ERROR, (_event, data) => {
         console.warn('HLS stream event:', data.type, data.details);
 
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              if (retryCountRef.current < 5) {
-                retryCountRef.current += 1;
-                console.log(`Auto-recovering from network error (attempt ${retryCountRef.current}/5)...`);
-                setIsBuffering(true);
-                setTimeout(() => {
-                  hls.startLoad();
-                }, 1000);
-              } else {
-                hls.destroy();
-                setError('Live stream connection momentarily interrupted. Click retry to reconnect.');
-                setIsLoading(false);
-                setIsPlaying(false);
-              }
+              console.log('Recovering from network drop...');
+              hls.startLoad();
               break;
-
             case Hls.ErrorTypes.MEDIA_ERROR:
-              console.log('Recovering from media glitch...');
+              console.log('Recovering media buffer...');
               hls.recoverMediaError();
               break;
-
             default:
               hls.destroy();
               setError('Live TV stream connection reset. Click retry.');
               setIsLoading(false);
-              setIsPlaying(false);
+              pauseTv();
               break;
           }
         }
@@ -143,18 +124,46 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
       video.src = streamUrl;
       video.addEventListener('loadedmetadata', () => {
         setIsLoading(false);
+        setIsBuffering(false);
         if (autoPlay) {
-          video.play().catch(() => {});
+          attemptPlay(false);
         }
       });
       video.addEventListener('error', () => {
         setIsLoading(false);
-        setIsPlaying(false);
         setError('Live TV broadcast stream is currently offline.');
       });
     } else {
-      setError('HLS playback is not supported by your web browser.');
+      setError('HLS playback is not supported by your browser.');
       setIsLoading(false);
+    }
+  };
+
+  const attemptPlay = (startMutedIfBlocked = true) => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    video.muted = isMuted;
+    const playPromise = video.play();
+
+    if (playPromise !== undefined) {
+      playPromise
+        .then(() => {
+          playTv(station);
+          trackEvent({
+            event_type: 'TV_PLAY',
+            station_id: station.id,
+          });
+        })
+        .catch((err) => {
+          console.warn('Autoplay unmuted blocked by browser policy:', err);
+          if (startMutedIfBlocked) {
+            // If browser blocks unmuted autoplay, mute as fallback and start playback
+            video.muted = true;
+            setIsMuted(true);
+            video.play().then(() => playTv(station)).catch(() => {});
+          }
+        });
     }
   };
 
@@ -162,35 +171,42 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
     loadStream();
 
     return () => {
+      if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current);
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
     };
-  }, [station.stream_url, dataSaver]);
+  }, [station.stream_url]);
+
+  // Sync external play/pause from PlayerContext (e.g. when radio starts, pause TV!)
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (!isTvPlaying && !video.paused) {
+      video.pause();
+    }
+  }, [isTvPlaying]);
 
   const togglePlay = () => {
     const video = videoRef.current;
     if (!video) return;
 
-    if (isPlaying) {
-      video.pause();
-    } else {
+    if (video.paused) {
       if (error) {
         loadStream();
       } else {
+        video.muted = isMuted;
         video.play().then(() => {
-          trackEvent({
-            event_type: 'TV_PLAY',
-            station_id: station.id,
-          });
+          playTv(station);
         }).catch(() => {
-          // Autoplay policy prevented unmuted playback
-          video.muted = true;
-          setIsMuted(true);
-          video.play();
+          attemptPlay(true);
         });
       }
+    } else {
+      video.pause();
+      pauseTv();
     }
   };
 
@@ -229,38 +245,54 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     controlsTimeoutRef.current = setTimeout(() => {
-      if (isPlaying) setShowControls(false);
+      if (isTvPlaying) setShowControls(false);
     }, 3500);
+  };
+
+  // Debounced buffering state (prevents flashing "Optimizing buffer" on normal micro-delays)
+  const handleWaiting = () => {
+    if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current);
+    bufferingTimerRef.current = setTimeout(() => {
+      setIsBuffering(true);
+    }, 1200);
+  };
+
+  const handlePlaying = () => {
+    if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current);
+    setIsBuffering(false);
+    setIsLoading(false);
+    setError(null);
+    playTv(station);
   };
 
   return (
     <div
       ref={containerRef}
       onMouseMove={handleMouseMove}
-      onMouseLeave={() => isPlaying && setShowControls(false)}
+      onMouseLeave={() => isTvPlaying && setShowControls(false)}
       className={`relative w-full aspect-video bg-black rounded-2xl overflow-hidden shadow-2xl group select-none ${className}`}
     >
       <video
         ref={videoRef}
         playsInline
         muted={isMuted}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onWaiting={() => setIsBuffering(true)}
-        onPlaying={() => {
-          setIsPlaying(true);
+        onPlay={handlePlaying}
+        onPause={() => pauseTv()}
+        onWaiting={handleWaiting}
+        onPlaying={handlePlaying}
+        onCanPlay={() => {
+          if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current);
           setIsBuffering(false);
           setIsLoading(false);
-          setError(null);
         }}
         className="w-full h-full object-contain cursor-pointer"
         onClick={togglePlay}
       />
 
-      {/* Top Banner (Station Name + Live Badge + Data Saver Indicator) */}
+      {/* Top Banner (Station Name + Live Badge) */}
       <div
         className={`absolute top-0 left-0 right-0 p-3 sm:p-4 bg-gradient-to-b from-black/85 via-black/35 to-transparent flex items-center justify-between transition-opacity duration-300 pointer-events-none ${
-          showControls || !isPlaying ? 'opacity-100' : 'opacity-0'
+          showControls || !isTvPlaying ? 'opacity-100' : 'opacity-0'
         }`}
       >
         <div className="flex items-center gap-2.5">
@@ -274,30 +306,30 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
           </h3>
         </div>
 
-        <div className="flex items-center gap-2 pointer-events-auto">
-          {/* Data Saver Mode Toggle Pill */}
-          <button
-            onClick={() => setDataSaver(!dataSaver)}
-            className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 transition-all backdrop-blur-sm ${
-              dataSaver
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
-                : 'bg-white/10 text-slate-300 border border-white/10 hover:bg-white/20'
-            }`}
-            title={dataSaver ? 'Data Saver is Active: Buffer limited to save mobile data' : 'Click to enable Data Saver'}
-          >
-            <Zap className={`w-3 h-3 ${dataSaver ? 'text-emerald-400' : 'text-slate-400'}`} />
-            <span>{dataSaver ? 'Data Saver ON' : 'Data Saver'}</span>
-          </button>
+        <div className="flex items-center gap-2">
+          {station.frequency && (
+            <span className="hidden sm:inline-block px-2.5 py-0.5 rounded bg-white/20 text-white text-xs font-semibold backdrop-blur-sm">
+              {station.frequency}
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Loading / Buffering Overlay */}
-      {(isLoading || isBuffering) && !error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[1px] pointer-events-none">
+      {/* Loading Overlay (Initial Load) */}
+      {isLoading && !error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 backdrop-blur-[2px] pointer-events-none z-20">
           <Loader2 className="w-10 h-10 text-rba-blue animate-spin mb-2" />
           <p className="text-white text-xs sm:text-sm font-semibold tracking-wide">
-            {isBuffering ? 'Optimizing live buffer...' : 'Connecting to live broadcast...'}
+            Connecting to live broadcast...
           </p>
+        </div>
+      )}
+
+      {/* Buffering Indicator (Only appears if stalled for > 1.2s, non-intrusive) */}
+      {isBuffering && !isLoading && !error && (
+        <div className="absolute top-14 right-4 z-20 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-black/70 backdrop-blur-sm text-white text-xs font-semibold border border-white/10 animate-fadeIn">
+          <Loader2 className="w-3.5 h-3.5 text-rba-yellow animate-spin" />
+          <span>Buffering stream...</span>
         </div>
       )}
 
@@ -305,7 +337,7 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
       {error && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 p-6 text-center z-30">
           <AlertCircle className="w-10 h-10 text-red-500 mb-3" />
-          <h4 className="text-white font-bold text-base mb-1">Live Broadcast Connection Stalled</h4>
+          <h4 className="text-white font-bold text-base mb-1">Live Broadcast Interrupted</h4>
           <p className="text-slate-300 text-xs max-w-sm mb-5">{error}</p>
           <button
             onClick={loadStream}
@@ -317,40 +349,29 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
       )}
 
       {/* Center Big Play Button when paused */}
-      {!isPlaying && !isLoading && !error && (
+      {!isTvPlaying && !isLoading && !error && (
         <button
           onClick={togglePlay}
-          className="absolute inset-0 m-auto w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-rba-blue/90 hover:bg-rba-blue text-white flex items-center justify-center shadow-2xl transition-transform hover:scale-110 active:scale-95 z-20"
+          className="absolute inset-0 m-auto w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-rba-blue/95 hover:bg-rba-blue text-white flex items-center justify-center shadow-2xl transition-transform hover:scale-110 active:scale-95 z-20"
           aria-label="Play Live TV"
         >
           <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-current ml-1" />
         </button>
       )}
 
-      {/* Unmute prompt banner if muted and playing */}
-      {isPlaying && isMuted && (
-        <button
-          onClick={toggleMute}
-          className="absolute top-16 left-4 z-20 px-3 py-1.5 rounded-lg bg-black/75 hover:bg-black/90 border border-white/20 text-white text-xs font-semibold flex items-center gap-2 shadow-lg backdrop-blur-sm transition-all"
-        >
-          <VolumeX className="w-4 h-4 text-rba-yellow" />
-          Tap to Unmute Audio
-        </button>
-      )}
-
       {/* Bottom Controls Bar */}
       <div
         className={`absolute bottom-0 left-0 right-0 p-3 sm:p-4 bg-gradient-to-t from-black/90 via-black/50 to-transparent flex items-center justify-between transition-opacity duration-300 z-20 ${
-          showControls || !isPlaying ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+          showControls || !isTvPlaying ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
       >
         <div className="flex items-center gap-3">
           <button
             onClick={togglePlay}
             className="p-2 rounded-lg text-white hover:bg-white/20 transition-colors"
-            aria-label={isPlaying ? 'Pause' : 'Play'}
+            aria-label={isTvPlaying ? 'Pause' : 'Play'}
           >
-            {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
+            {isTvPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
           </button>
 
           <div className="flex items-center gap-2">

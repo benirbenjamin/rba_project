@@ -3,6 +3,7 @@ import { Station } from '../types';
 import { trackEvent } from '../services/api';
 
 interface PlayerContextType {
+  // Radio State
   currentStation: Station | null;
   isPlaying: boolean;
   isLoading: boolean;
@@ -19,11 +20,24 @@ interface PlayerContextType {
   retryPlayback: () => void;
   stopStation: () => void;
   setIsExpanded: (expanded: boolean) => void;
+
+  // TV & Picture-in-Picture State
+  activeTvStation: Station | null;
+  isTvPlaying: boolean;
+  isTvMuted: boolean;
+  isTvPipDismissed: boolean;
+  playTv: (station: Station) => void;
+  pauseTv: () => void;
+  toggleTvPlay: () => void;
+  toggleTvMute: () => void;
+  closeTvPip: () => void;
+  setActiveTvStation: (station: Station) => void;
 }
 
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
 
 export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Radio State
   const [currentStation, setCurrentStation] = useState<Station | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -32,6 +46,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
+
+  // TV & Picture-in-Picture State
+  const [activeTvStation, setActiveTvStation] = useState<Station | null>(null);
+  const [isTvPlaying, setIsTvPlaying] = useState<boolean>(false);
+  const [isTvMuted, setIsTvMuted] = useState<boolean>(true);
+  const [isTvPipDismissed, setIsTvPipDismissed] = useState<boolean>(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -42,29 +62,21 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     audio.volume = volume;
     audioRef.current = audio;
 
-    const handleWaiting = () => {
-      setIsBuffering(true);
-    };
-
+    const handleWaiting = () => setIsBuffering(true);
     const handleCanPlay = () => {
       setIsLoading(false);
       setIsBuffering(false);
       setError(null);
     };
-
     const handlePlaying = () => {
       setIsPlaying(true);
       setIsLoading(false);
       setIsBuffering(false);
       setError(null);
     };
-
-    const handlePause = () => {
-      setIsPlaying(false);
-    };
-
+    const handlePause = () => setIsPlaying(false);
     const handleError = (e: any) => {
-      console.warn('Audio stream playback error:', e);
+      console.warn('Audio playback error:', e);
       setIsLoading(false);
       setIsBuffering(false);
       setIsPlaying(false);
@@ -88,24 +100,27 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, []);
 
+  // Radio Controls
   const playStation = (station: Station) => {
+    // Crucial requirement: When a radio is played, pause any active TV broadcast!
+    if (isTvPlaying) {
+      setIsTvPlaying(false);
+    }
+
     if (!audioRef.current) return;
 
-    // If already playing this station, just toggle or ensure playing
     if (currentStation?.id === station.id && isPlaying) {
       return;
     }
 
-    // Stop current stream if switching stations
     audioRef.current.pause();
     setError(null);
     setIsLoading(true);
     setIsBuffering(false);
     setCurrentStation(station);
 
-    // Append cache buster timestamp for live radio stream freshness
-    const streamUrl = station.stream_url.includes('?') 
-      ? `${station.stream_url}&_t=${Date.now()}` 
+    const streamUrl = station.stream_url.includes('?')
+      ? `${station.stream_url}&_t=${Date.now()}`
       : `${station.stream_url}?_t=${Date.now()}`;
 
     audioRef.current.src = streamUrl;
@@ -117,17 +132,15 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         .then(() => {
           setIsPlaying(true);
           setIsLoading(false);
-          // Track analytics event
           trackEvent({
             event_type: 'RADIO_PLAY',
             station_id: station.id,
           });
         })
         .catch((err) => {
-          console.warn('Audio autoplay prevented or stream connection failed:', err);
+          console.warn('Audio play error:', err);
           setIsLoading(false);
           setIsPlaying(false);
-          // User interaction required or stream offline
           if (err.name === 'NotAllowedError') {
             setError('Click play to allow audio in your browser.');
           } else {
@@ -158,15 +171,15 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (error) {
         retryPlayback();
       } else if (audioRef.current) {
+        // Pause TV if playing
+        if (isTvPlaying) setIsTvPlaying(false);
         audioRef.current.play().catch(() => retryPlayback());
       }
     }
   };
 
   const retryPlayback = () => {
-    if (currentStation) {
-      playStation(currentStation);
-    }
+    if (currentStation) playStation(currentStation);
   };
 
   const stopStation = () => {
@@ -198,6 +211,39 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     audioRef.current.muted = newMute;
   };
 
+  // TV & Picture-in-Picture Controls
+  const playTv = (station: Station) => {
+    // When TV is played, pause any active radio stream
+    if (isPlaying) {
+      pauseStation();
+    }
+
+    setActiveTvStation(station);
+    setIsTvPlaying(true);
+    setIsTvPipDismissed(false);
+  };
+
+  const pauseTv = () => {
+    setIsTvPlaying(false);
+  };
+
+  const toggleTvPlay = () => {
+    if (isTvPlaying) {
+      pauseTv();
+    } else if (activeTvStation) {
+      playTv(activeTvStation);
+    }
+  };
+
+  const toggleTvMute = () => {
+    setIsTvMuted(!isTvMuted);
+  };
+
+  const closeTvPip = () => {
+    setIsTvPipDismissed(true);
+    setIsTvPlaying(false);
+  };
+
   return (
     <PlayerContext.Provider
       value={{
@@ -217,6 +263,18 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         retryPlayback,
         stopStation,
         setIsExpanded,
+
+        // TV
+        activeTvStation,
+        isTvPlaying,
+        isTvMuted,
+        isTvPipDismissed,
+        playTv,
+        pauseTv,
+        toggleTvPlay,
+        toggleTvMute,
+        closeTvPip,
+        setActiveTvStation,
       }}
     >
       {children}

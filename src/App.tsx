@@ -7,6 +7,7 @@ import { AnalyticsProvider } from './context/AnalyticsContext';
 import { Header } from './components/layout/Header';
 import { Footer } from './components/layout/Footer';
 import { GlobalRadioPlayer } from './components/player/GlobalRadioPlayer';
+import { FloatingPipTV } from './components/player/FloatingPipTV';
 
 // Pages
 import { Home } from './pages/Home';
@@ -161,6 +162,9 @@ export const App: React.FC = () => {
                 {/* 404 Route */}
                 <Route path="*" element={<PublicLayout><NotFoundPage /></PublicLayout>} />
               </Routes>
+
+              {/* Picture-in-Picture TV Player for Seamless Background Viewing */}
+              <FloatingPipTV />
 
               {/* Persistent Global Radio Player */}
               <GlobalRadioPlayer />
