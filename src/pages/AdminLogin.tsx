@@ -126,13 +126,9 @@ export const AdminLoginPage: React.FC = () => {
             </button>
           </form>
 
-          {/* Helper hint for default credentials */}
           <div className="mt-6 pt-5 border-t border-slate-700/60 text-center">
             <p className="text-[11px] text-slate-400">
-              Default Super Admin: <span className="font-mono text-slate-300">superadmin@rba.co.rw</span>
-            </p>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Password: <span className="font-mono text-slate-300">RbaAdmin2026!#</span>
+              Access restricted to authorized RBA broadcast engineers & editorial staff.
             </p>
           </div>
         </div>
